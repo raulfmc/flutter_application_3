@@ -84,19 +84,18 @@ class RecipeDatabase {
     if (_providedDatabase != null) {
       _database = _providedDatabase;
       await _createTables(_database!);
-      await _seedRecipes(_database!);
-      return;
+    } else {
+      final path = p.join(await getDatabasesPath(), _databaseName);
+      _database = await openDatabase(
+        path,
+        version: 1,
+        onCreate: (db, _) async {
+          await _createTables(db);
+        },
+      );
     }
 
-    final path = p.join(await getDatabasesPath(), _databaseName);
-    _database = await openDatabase(
-      path,
-      version: 1,
-      onCreate: (db, _) async {
-        await _createTables(db);
-        await _seedRecipes(db);
-      },
-    );
+    await _removeStarterRecipes(_database!);
   }
 
   Future<Database> get _db async {
@@ -143,26 +142,17 @@ class RecipeDatabase {
     ''');
   }
 
-  Future<void> _seedRecipes(Database db) async {
-    final count = Sqflite.firstIntValue(
-      await db.rawQuery('SELECT COUNT(*) FROM recipes'),
-    );
-    if (count != 0) return;
-
-    final batch = db.batch();
-    for (final recipe in _starterRecipes) {
-      batch.insert('recipes', {
-        'id': recipe.id,
-        'name': recipe.name,
-        'category': recipe.category,
-        'minutes': 0,
-        'emoji': recipe.emoji,
-        'description': '',
-        'ingredients': recipe.ingredients,
-        'steps': recipe.preparation,
-      });
-    }
-    await batch.commit(noResult: true);
+  Future<void> _removeStarterRecipes(Database db) async {
+    await db.transaction((transaction) async {
+      for (final id in _starterRecipeIds) {
+        await transaction.delete(
+          'favorites',
+          where: 'recipe_id = ?',
+          whereArgs: [id],
+        );
+        await transaction.delete('recipes', where: 'id = ?', whereArgs: [id]);
+      }
+    });
   }
 
   Future<LocalUser> register({
@@ -418,35 +408,9 @@ class RecipeNotFoundException implements Exception {
   const RecipeNotFoundException();
 }
 
-const _starterRecipes = [
-  Recipe(
-    id: 'panqueca-banana',
-    name: 'Panqueca de banana',
-    category: 'Salgados',
-    ingredients:
-        '2 bananas maduras\n2 ovos\n4 colheres de aveia\nCanela a gosto',
-    preparation: 'Amasse as bananas em uma tigela. Misture os ovos, a aveia e a canela. Coloque pequenas porções em uma frigideira aquecida. Doure dos dois lados e sirva.',
-  ),
-  Recipe(
-    id: 'macarrao-cremoso',
-    name: 'Macarrão cremoso',
-    category: 'Salgados',
-    ingredients: '300 g de macarrão\n1 xícara de tomates\n1/2 xícara de creme de leite\nAlho e sal',
-    preparation: 'Cozinhe o macarrão em água com sal. Doure o alho e junte os tomates. Acrescente o creme de leite e misture. Junte o macarrão escorrido ao molho.',
-  ),
-  Recipe(
-    id: 'bolo-chocolate',
-    name: 'Bolo de chocolate',
-    category: 'Doces',
-    ingredients: '2 xícaras de farinha\n1 xícara de açúcar\n1 xícara de chocolate em pó\n2 ovos\n1 xícara de leite',
-    preparation: 'Misture todos os ingredientes até a massa ficar lisa. Despeje em uma forma untada. Asse a 180 °C por cerca de 35 minutos.',
-  ),
-  Recipe(
-    id: 'sopa-abobora',
-    name: 'Sopa de abóbora',
-    category: 'Salgados',
-    ingredients:
-        '500 g de abóbora\n1/2 cebola\n2 xícaras de caldo\nSal e azeite',
-    preparation: 'Refogue a cebola com um pouco de azeite. Junte a abóbora e o caldo. Cozinhe até a abóbora ficar macia. Bata até formar um creme e acerte o sal.',
-  ),
+const _starterRecipeIds = [
+  'panqueca-banana',
+  'macarrao-cremoso',
+  'bolo-chocolate',
+  'sopa-abobora',
 ];

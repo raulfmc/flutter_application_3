@@ -7,13 +7,15 @@ import 'package:flutter_application_3/main.dart';
 
 void main() {
   late RecipeDatabase database;
+  late Database sqliteDatabase;
 
   setUpAll(sqfliteFfiInit);
 
   setUp(() async {
-    database = RecipeDatabase(
-      database: await databaseFactoryFfi.openDatabase(inMemoryDatabasePath),
+    sqliteDatabase = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
     );
+    database = RecipeDatabase(database: sqliteDatabase);
     await database.initialize();
   });
 
@@ -41,14 +43,60 @@ void main() {
     );
     expect((await database.savedSession())?.name, 'Ana');
 
-    final recipes = await database.recipesFor(user.id);
+    final recipeId = await database.addRecipe(
+      name: 'Receita favorita',
+      category: 'Salgados',
+      ingredients: 'Ingredientes',
+      preparation: 'Preparo',
+    );
     await database.setFavorite(
       userId: user.id,
-      recipeId: recipes.first.id,
+      recipeId: recipeId,
       isFavorite: true,
     );
-    expect((await database.recipesFor(user.id)).first.isFavorite, isTrue);
+    expect(
+      (await database.recipesFor(user.id))
+          .singleWhere((item) => item.id == recipeId)
+          .isFavorite,
+      isTrue,
+    );
   });
+
+  test('starts without predefined recipes', () async {
+    expect(await database.recipesFor(1), isEmpty);
+  });
+
+  test(
+    'removes predefined recipes while preserving personal recipes',
+    () async {
+      await sqliteDatabase.insert('recipes', {
+        'id': 'panqueca-banana',
+        'name': 'Panqueca de banana',
+        'category': 'Salgados',
+        'minutes': 0,
+        'emoji': '',
+        'description': '',
+        'ingredients': '',
+        'steps': '',
+      });
+      await sqliteDatabase.insert('recipes', {
+        'id': 'receita-pessoal',
+        'name': 'Minha receita',
+        'category': 'Doces',
+        'minutes': 0,
+        'emoji': '',
+        'description': '',
+        'ingredients': '',
+        'steps': '',
+      });
+
+      final reopenedDatabase = RecipeDatabase(database: sqliteDatabase);
+      await reopenedDatabase.initialize();
+
+      final recipes = await reopenedDatabase.recipesFor(1);
+      expect(recipes.map((recipe) => recipe.id), ['receita-pessoal']);
+    },
+  );
 
   test('adds, edits, and deletes recipes in SQLite', () async {
     final id = await database.addRecipe(

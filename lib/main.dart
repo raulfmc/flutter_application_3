@@ -286,7 +286,7 @@ class _LoginPageState extends State<_LoginPage> {
                         key: const ValueKey('name-field'),
                         controller: _nameController,
                         textCapitalization: TextCapitalization.words,
-                        decoration: const InputDecoration(hintText: 'Nome'),
+                        decoration: const InputDecoration(),
                         validator: (value) =>
                             (value == null || value.trim().isEmpty)
                             ? 'Digite seu nome.'
@@ -301,9 +301,7 @@ class _LoginPageState extends State<_LoginPage> {
                       controller: _emailController,
                       keyboardType: TextInputType.emailAddress,
                       autocorrect: false,
-                      decoration: const InputDecoration(
-                        hintText: 'voce@email.com',
-                      ),
+                      decoration: const InputDecoration(),
                       validator: (value) {
                         final email = value?.trim() ?? '';
                         return email.contains('@') && email.contains('.')
@@ -319,7 +317,6 @@ class _LoginPageState extends State<_LoginPage> {
                       controller: _passwordController,
                       obscureText: _hidePassword,
                       decoration: InputDecoration(
-                        hintText: 'Pelo menos 6 caracteres',
                         suffixIcon: IconButton(
                           tooltip: _hidePassword
                               ? 'Mostrar senha'
@@ -406,12 +403,7 @@ class _RecipeHomePage extends StatefulWidget {
 }
 
 class _RecipeHomePageState extends State<_RecipeHomePage> {
-  static const _categories = [
-    'Todas',
-    'Salgados',
-    'Doces',
-    'Bebidas',
-  ];
+  static const _categories = ['Todas', 'Salgados', 'Doces', 'Bebidas'];
 
   List<Recipe> _recipes = [];
   String _category = 'Todas';
@@ -567,7 +559,7 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
                 TextField(
                   onChanged: (value) => setState(() => _search = value),
                   decoration: const InputDecoration(
-                    hintText: 'Buscar receita pelo nome',
+                    labelText: 'Buscar receita',
                     prefixIcon: Icon(Icons.search_rounded, color: _brown),
                   ),
                 ),
@@ -779,7 +771,7 @@ class _RecipeFormPageState extends State<_RecipeFormPage> {
               key: const ValueKey('recipe-name-field'),
               controller: _nameController,
               textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(hintText: 'Ex.: Sopa da vovó'),
+              decoration: const InputDecoration(),
               validator: (value) => value == null || value.trim().isEmpty
                   ? 'Digite o nome da receita.'
                   : null,
@@ -815,10 +807,7 @@ class _RecipeFormPageState extends State<_RecipeFormPage> {
               textCapitalization: TextCapitalization.sentences,
               minLines: 4,
               maxLines: 8,
-              decoration: const InputDecoration(
-                hintText: 'Escreva os ingredientes como preferir',
-                alignLabelWithHint: true,
-              ),
+              decoration: const InputDecoration(alignLabelWithHint: true),
               validator: (value) => value == null || value.trim().isEmpty
                   ? 'Digite os ingredientes.'
                   : null,
@@ -832,10 +821,7 @@ class _RecipeFormPageState extends State<_RecipeFormPage> {
               textCapitalization: TextCapitalization.sentences,
               minLines: 6,
               maxLines: 12,
-              decoration: const InputDecoration(
-                hintText: 'Escreva o preparo completo do seu jeito',
-                alignLabelWithHint: true,
-              ),
+              decoration: const InputDecoration(alignLabelWithHint: true),
               validator: (value) => value == null || value.trim().isEmpty
                   ? 'Escreva o modo de preparo.'
                   : null,
@@ -863,7 +849,6 @@ class _RecipeFormPageState extends State<_RecipeFormPage> {
       ),
     );
   }
-
 }
 
 class _FilterButton extends StatelessWidget {
@@ -1059,12 +1044,12 @@ class _RecipeDetailPageState extends State<_RecipeDetailPage> {
             alignment: Alignment.center,
             child: Text(recipe.emoji, style: const TextStyle(fontSize: 68)),
           ),
-            const SizedBox(height: 12),
-            Text(
-              recipe.category,
-              style: const TextStyle(color: _subtle, fontSize: 13),
-            ),
-            const SizedBox(height: 20),
+          const SizedBox(height: 12),
+          Text(
+            recipe.category,
+            style: const TextStyle(color: _subtle, fontSize: 13),
+          ),
+          const SizedBox(height: 20),
           const Text(
             'Ingredientes',
             style: TextStyle(

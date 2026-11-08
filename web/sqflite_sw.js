@@ -9925,4 +9925,3 @@ return}var s=document.scripts
 function onLoad(b){for(var q=0;q<s.length;++q){s[q].removeEventListener("load",onLoad,false)}a(b.target)}for(var r=0;r<s.length;++r){s[r].addEventListener("load",onLoad,false)}})(function(a){v.currentScript=a
 var s=function(b){return A.t2(A.rK(b))}
 if(typeof dartMainRunner==="function"){dartMainRunner(s,[])}else{s([])}})})()
-//# sourceMappingURL=sqflite_sw.dart.js.map
