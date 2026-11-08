@@ -1,11 +1,11 @@
 {
-    "name": "flutter_application_3",
-    "short_name": "flutter_application_3",
+    "name": "Meu Livro de Receitas",
+    "short_name": "Meu Livro",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#FFFBF8",
+    "theme_color": "#B9683E",
+    "description": "Seu livro pessoal de receitas.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
