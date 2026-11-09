@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'database_factory_setup.dart';
-import 'data/recipe_database.dart';
+import 'banco_de_dados.dart';
 
 const Color _brown = Color(0xFF8A4528);
 const Color _orange = Color(0xFFB9683E);
@@ -210,7 +209,7 @@ class _LoginPageState extends State<_LoginPage> {
     setState(() {
       _busy = true;
       _message = null;
-    });
+    }); 
     try {
       final LocalUser user;
       if (_creatingAccount) {
@@ -522,6 +521,17 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
     }
   }
 
+  Future<void> _openAccessManagement() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => _AccessManagementPage(
+          database: widget.database,
+          admin: widget.user,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final recipes = _visibleRecipes;
@@ -532,6 +542,12 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
           style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
         ),
         actions: [
+          if (widget.user.isAdmin)
+            IconButton(
+              tooltip: 'Gerenciar acessos',
+              onPressed: _openAccessManagement,
+              icon: const Icon(Icons.manage_accounts_outlined),
+            ),
           IconButton(
             tooltip: 'Sair da conta',
             onPressed: widget.onLogout,
@@ -645,6 +661,204 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
         icon: const Icon(Icons.add),
         label: const Text('Adicionar receita'),
       ),
+    );
+  }
+}
+
+class _AccessManagementPage extends StatefulWidget {
+  const _AccessManagementPage({
+    required this.database,
+    required this.admin,
+  });
+
+  final RecipeDatabase database;
+  final LocalUser admin;
+
+  @override
+  State<_AccessManagementPage> createState() => _AccessManagementPageState();
+}
+
+class _AccessManagementPageState extends State<_AccessManagementPage> {
+  List<LocalUser> _accounts = [];
+  bool _loading = true;
+  int? _workingAccountId;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAccounts();
+  }
+
+  Future<void> _loadAccounts() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final accounts = await widget.database.accountsForAdmin(widget.admin.id);
+      if (!mounted) return;
+      setState(() {
+        _accounts = accounts;
+        _loading = false;
+      });
+    } on Exception catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Não foi possível carregar as contas: $error';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _setBlocked(LocalUser account, bool isBlocked) async {
+    setState(() => _workingAccountId = account.id);
+    try {
+      await widget.database.setAccountBlocked(
+        adminUserId: widget.admin.id,
+        accountId: account.id,
+        isBlocked: isBlocked,
+      );
+      await _loadAccounts();
+    } on Exception catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Não foi possível alterar o acesso: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _workingAccountId = null);
+    }
+  }
+
+  Future<void> _deleteAccount(LocalUser account) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Excluir conta?'),
+        content: Text(
+          'A conta de ${account.name} (${account.email}) será excluída.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _workingAccountId = account.id);
+    try {
+      await widget.database.deleteAccount(
+        adminUserId: widget.admin.id,
+        accountId: account.id,
+      );
+      await _loadAccounts();
+    } on Exception catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Não foi possível excluir a conta: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _workingAccountId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Gerenciar acessos')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: _brown))
+          : _error != null
+          ? _ErrorMessage(message: _error!, onRetry: _loadAccounts)
+          : RefreshIndicator(
+              color: _brown,
+              onRefresh: _loadAccounts,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  const Text(
+                    'Contas cadastradas neste aparelho',
+                    style: TextStyle(
+                      color: _text,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Contas bloqueadas não conseguem entrar. A conta '
+                    'administradora não pode ser bloqueada ou excluída.',
+                    style: TextStyle(color: _subtle),
+                  ),
+                  const SizedBox(height: 12),
+                  for (final account in _accounts)
+                    Card(
+                      elevation: 0,
+                      color: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        side: const BorderSide(color: Color(0xFFECE2DC)),
+                      ),
+                      child: ListTile(
+                        title: Text(account.name),
+                        subtitle: Text(
+                          '${account.email}${account.isBlocked ? ' • Bloqueada' : ''}',
+                        ),
+                        leading: Icon(
+                          account.isAdmin
+                              ? Icons.admin_panel_settings_outlined
+                              : Icons.person_outline,
+                          color: account.isAdmin ? _brown : _subtle,
+                        ),
+                        trailing: account.isAdmin
+                            ? const Chip(label: Text('Admin'))
+                            : _workingAccountId == account.id
+                            ? const SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: _brown,
+                                ),
+                              )
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    tooltip: account.isBlocked
+                                        ? 'Desbloquear conta'
+                                        : 'Bloquear conta',
+                                    onPressed: () => _setBlocked(
+                                      account,
+                                      !account.isBlocked,
+                                    ),
+                                    icon: Icon(
+                                      account.isBlocked
+                                          ? Icons.lock_open_outlined
+                                          : Icons.block_outlined,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Excluir conta',
+                                    onPressed: () => _deleteAccount(account),
+                                    icon: const Icon(
+                                      Icons.delete_outline,
+                                      color: Color(0xFF9A3829),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
     );
   }
 }

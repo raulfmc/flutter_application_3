@@ -1,8 +1,23 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:cryptography/cryptography.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart' as ffi_web;
+
+Future<void> configureDatabaseFactory() async {
+  if (kIsWeb) {
+    databaseFactory = ffi_web.databaseFactoryFfiWeb;
+  } else if (defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.macOS) {
+    ffi.sqfliteFfiInit();
+    databaseFactory = ffi.databaseFactoryFfi;
+  }
+}
 
 class Recipe {
   const Recipe({
@@ -58,16 +73,28 @@ String _readRecipeText(String value) {
 }
 
 class LocalUser {
-  const LocalUser({required this.id, required this.name});
+  const LocalUser({
+    required this.id,
+    required this.name,
+    required this.email,
+    this.isAdmin = false,
+    this.isBlocked = false,
+  });
 
   final int id;
   final String name;
+  final String email;
+  final bool isAdmin;
+  final bool isBlocked;
 }
 
+/// Banco SQLite local de usuários, receitas e favoritos.
 class RecipeDatabase {
   RecipeDatabase({Database? database}) : _providedDatabase = database;
 
   static const _databaseName = 'meu_livro_de_receitas.db';
+  static const _adminEmail = 'raulferreira081@gmail.com.br';
+  static const _adminPassword = 'adimin_raul_2006';
   static const _passwordIterations = 120000;
   static final _passwordAlgorithm = Pbkdf2(
     macAlgorithm: Hmac.sha256(),
@@ -88,13 +115,17 @@ class RecipeDatabase {
       final path = p.join(await getDatabasesPath(), _databaseName);
       _database = await openDatabase(
         path,
-        version: 1,
+        version: 2,
         onCreate: (db, _) async {
+          await _createTables(db);
+        },
+        onUpgrade: (db, _, _) async {
           await _createTables(db);
         },
       );
     }
 
+    await _ensureAdminAccount(_database!);
     await _removeStarterRecipes(_database!);
   }
 
@@ -110,9 +141,23 @@ class RecipeDatabase {
         name TEXT NOT NULL,
         email TEXT NOT NULL COLLATE NOCASE UNIQUE,
         password_salt TEXT NOT NULL,
-        password_hash TEXT NOT NULL
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        is_blocked INTEGER NOT NULL DEFAULT 0
       )
     ''');
+    final userColumns = await db.rawQuery('PRAGMA table_info(users)');
+    final columnNames = userColumns.map((column) => column['name']).toSet();
+    if (!columnNames.contains('role')) {
+      await db.execute(
+        "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
+      );
+    }
+    if (!columnNames.contains('is_blocked')) {
+      await db.execute(
+        'ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0',
+      );
+    }
     await db.execute('''
       CREATE TABLE IF NOT EXISTS recipes (
         id TEXT PRIMARY KEY,
@@ -140,6 +185,24 @@ class RecipeDatabase {
         value TEXT NOT NULL
       )
     ''');
+  }
+
+  Future<void> _ensureAdminAccount(Database db) async {
+    final admin = {
+      'name': 'Administrador',
+      'email': _adminEmail,
+      'password_salt': '',
+      'password_hash': '',
+      'role': 'admin',
+      'is_blocked': 0,
+    };
+    final updated = await db.update(
+      'users',
+      admin,
+      where: 'email = ?',
+      whereArgs: [_adminEmail],
+    );
+    if (updated == 0) await db.insert('users', admin);
   }
 
   Future<void> _removeStarterRecipes(Database db) async {
@@ -183,8 +246,14 @@ class RecipeDatabase {
       'email': normalizedEmail,
       'password_salt': _toHex(salt),
       'password_hash': _toHex(hash),
+      'role': 'user',
+      'is_blocked': 0,
     });
-    final user = LocalUser(id: userId, name: name.trim());
+    final user = LocalUser(
+      id: userId,
+      name: name.trim(),
+      email: normalizedEmail,
+    );
     await _saveSession(userId);
     return user;
   }
@@ -203,12 +272,17 @@ class RecipeDatabase {
     if (rows.isEmpty) return null;
 
     final row = rows.first;
-    final salt = _fromHex(row['password_salt']! as String);
-    final expectedHash = _fromHex(row['password_hash']! as String);
-    final actualHash = await _passwordHash(password, salt);
-    if (!_constantTimeEquals(actualHash, expectedHash)) return null;
+    if (row['is_blocked'] == 1) return null;
+    if (row['role'] == 'admin') {
+      if (password != _adminPassword) return null;
+    } else {
+      final salt = _fromHex(row['password_salt']! as String);
+      final expectedHash = _fromHex(row['password_hash']! as String);
+      final actualHash = await _passwordHash(password, salt);
+      if (!_constantTimeEquals(actualHash, expectedHash)) return null;
+    }
 
-    final user = LocalUser(id: row['id']! as int, name: row['name']! as String);
+    final user = _userFromMap(row);
     await _saveSession(user.id);
     return user;
   }
@@ -227,15 +301,105 @@ class RecipeDatabase {
     if (userId == null) return null;
     final users = await db.query(
       'users',
-      columns: ['id', 'name'],
+      columns: ['id', 'name', 'email', 'role', 'is_blocked'],
       where: 'id = ?',
       whereArgs: [userId],
       limit: 1,
     );
     if (users.isEmpty) return null;
+    return _userFromMap(users.first);
+  }
+
+  Future<List<LocalUser>> accountsForAdmin(int adminUserId) async {
+    final db = await _db;
+    await _requireAdmin(db, adminUserId);
+    final rows = await db.query(
+      'users',
+      columns: ['id', 'name', 'email', 'role', 'is_blocked'],
+      orderBy: 'role DESC, name COLLATE NOCASE',
+    );
+    return rows.map(_userFromMap).toList();
+  }
+
+  Future<void> setAccountBlocked({
+    required int adminUserId,
+    required int accountId,
+    required bool isBlocked,
+  }) async {
+    final db = await _db;
+    await _requireAdmin(db, adminUserId);
+    final accounts = await db.query(
+      'users',
+      columns: ['role'],
+      where: 'id = ?',
+      whereArgs: [accountId],
+      limit: 1,
+    );
+    if (accounts.isEmpty) throw const AccountNotFoundException();
+    if (accounts.first['role'] == 'admin') {
+      throw const CannotManageAdministratorException();
+    }
+    await db.update(
+      'users',
+      {'is_blocked': isBlocked ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [accountId],
+    );
+  }
+
+  Future<void> deleteAccount({
+    required int adminUserId,
+    required int accountId,
+  }) async {
+    final db = await _db;
+    await _requireAdmin(db, adminUserId);
+    final accounts = await db.query(
+      'users',
+      columns: ['role'],
+      where: 'id = ?',
+      whereArgs: [accountId],
+      limit: 1,
+    );
+    if (accounts.isEmpty) throw const AccountNotFoundException();
+    if (accounts.first['role'] == 'admin') {
+      throw const CannotManageAdministratorException();
+    }
+    await db.transaction((transaction) async {
+      await transaction.delete(
+        'favorites',
+        where: 'user_id = ?',
+        whereArgs: [accountId],
+      );
+      await transaction.delete(
+        'users',
+        where: 'id = ?',
+        whereArgs: [accountId],
+      );
+    });
+  }
+
+  Future<void> _requireAdmin(Database db, int userId) async {
+    final rows = await db.query(
+      'users',
+      columns: ['role', 'is_blocked'],
+      where: 'id = ?',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (rows.isEmpty ||
+        rows.first['role'] != 'admin' ||
+        rows.first['is_blocked'] == 1) {
+      throw const AdminAuthorizationException();
+    }
+  }
+
+  LocalUser _userFromMap(Map<String, Object?> row) {
     return LocalUser(
-      id: users.first['id']! as int,
-      name: users.first['name']! as String,
+      id: row['id']! as int,
+      name: row['name']! as String,
+      email: row['email']! as String,
+      isAdmin: row['role'] == 'admin',
+      isBlocked: row['is_blocked'] == 1,
     );
   }
 
@@ -402,6 +566,18 @@ class RecipeDatabase {
 
 class AccountAlreadyExistsException implements Exception {
   const AccountAlreadyExistsException();
+}
+
+class AdminAuthorizationException implements Exception {
+  const AdminAuthorizationException();
+}
+
+class AccountNotFoundException implements Exception {
+  const AccountNotFoundException();
+}
+
+class CannotManageAdministratorException implements Exception {
+  const CannotManageAdministratorException();
 }
 
 class RecipeNotFoundException implements Exception {

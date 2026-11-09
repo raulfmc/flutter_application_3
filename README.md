@@ -7,9 +7,22 @@ excluídas pela tela de detalhes. As categorias são Salgados, Doces e Bebidas.
 
 ## Dados
 
-O SQLite guarda as contas, as receitas e as favoritas localmente. As senhas são
-armazenadas como hashes com salt; elas não são gravadas em texto puro. Não há
-servidor, sincronização entre aparelhos ou recuperação de senha.
+O SQLite guarda as contas, as receitas e as favoritas localmente em cada
+aparelho; o app não adiciona receitas demonstrativas ao iniciar. As receitas são
+compartilhadas entre contas no mesmo aparelho. Não há servidor, sincronização
+entre aparelhos ou recuperação de senha. As senhas das contas comuns são
+armazenadas como hashes com salt. A senha administrativa é uma comparação
+simples definida em texto no código; qualquer pessoa com acesso ao código pode
+vê-la.
+
+## Administração de acessos
+
+Há uma conta administradora preconfigurada que pode abrir **Gerenciar acessos**
+para listar, bloquear, desbloquear e excluir contas locais. A conta administrativa
+não pode ser bloqueada nem excluída. O controle é local e não substitui autorização
+no servidor: alguém que possa modificar o app ou o banco do aparelho pode
+contorná-lo. A lógica do banco está reunida em
+[`lib/banco_de_dados.dart`](lib/banco_de_dados.dart).
 
 ## Executar
 

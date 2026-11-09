@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-import 'package:flutter_application_3/data/recipe_database.dart';
+import 'package:flutter_application_3/banco_de_dados.dart';
 import 'package:flutter_application_3/main.dart';
 
 void main() {
@@ -58,6 +58,116 @@ void main() {
       (await database.recipesFor(user.id))
           .singleWhere((item) => item.id == recipeId)
           .isFavorite,
+      isTrue,
+    );
+  });
+
+  test('administrator can list, block, unblock, and delete accounts', () async {
+    final admin = await database.login(
+      email: 'raulferreira081@gmail.com.br',
+      password: 'adimin_raul_2006',
+    );
+    expect(admin?.isAdmin, isTrue);
+    expect(
+      await database.login(
+        email: 'raulferreira081@gmail.com.br',
+        password: 'senha-incorreta',
+      ),
+      isNull,
+    );
+
+    final user = await database.register(
+      name: 'Ana',
+      email: 'ana@example.com',
+      password: 'minhasenha',
+    );
+
+    await expectLater(
+      database.accountsForAdmin(user.id),
+      throwsA(isA<AdminAuthorizationException>()),
+    );
+    await expectLater(
+      database.setAccountBlocked(
+        adminUserId: user.id,
+        accountId: user.id,
+        isBlocked: true,
+      ),
+      throwsA(isA<AdminAuthorizationException>()),
+    );
+
+    final accounts = await database.accountsForAdmin(admin!.id);
+    expect(accounts.map((account) => account.email), contains(user.email));
+    await database.setAccountBlocked(
+      adminUserId: admin.id,
+      accountId: user.id,
+      isBlocked: true,
+    );
+    expect(
+      await database.login(email: user.email, password: 'minhasenha'),
+      isNull,
+    );
+
+    await database.setAccountBlocked(
+      adminUserId: admin.id,
+      accountId: user.id,
+      isBlocked: false,
+    );
+    expect(
+      (await database.login(email: user.email, password: 'minhasenha'))?.id,
+      user.id,
+    );
+    await database.deleteAccount(adminUserId: admin.id, accountId: user.id);
+    expect(
+      (await database.accountsForAdmin(admin.id)).map((account) => account.id),
+      isNot(contains(user.id)),
+    );
+  });
+
+  test('administrator account cannot be blocked or deleted', () async {
+    final admin = await database.login(
+      email: 'raulferreira081@gmail.com.br',
+      password: 'adimin_raul_2006',
+    );
+    expect(admin, isNotNull);
+
+    await expectLater(
+      database.setAccountBlocked(
+        adminUserId: admin!.id,
+        accountId: admin.id,
+        isBlocked: true,
+      ),
+      throwsA(isA<CannotManageAdministratorException>()),
+    );
+    await expectLater(
+      database.deleteAccount(adminUserId: admin.id, accountId: admin.id),
+      throwsA(isA<CannotManageAdministratorException>()),
+    );
+  });
+
+  test('adds access-control columns to an existing users table', () async {
+    await sqliteDatabase.execute('DROP TABLE users');
+    await sqliteDatabase.execute('''
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        password_salt TEXT NOT NULL,
+        password_hash TEXT NOT NULL
+      )
+    ''');
+    final migratedDatabase = RecipeDatabase(database: sqliteDatabase);
+    await migratedDatabase.initialize();
+
+    final columns = await sqliteDatabase.rawQuery('PRAGMA table_info(users)');
+    expect(
+      columns.map((column) => column['name']),
+      containsAll(['role', 'is_blocked']),
+    );
+    expect(
+      (await migratedDatabase.login(
+        email: 'raulferreira081@gmail.com.br',
+        password: 'adimin_raul_2006',
+      ))?.isAdmin,
       isTrue,
     );
   });
