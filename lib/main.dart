@@ -126,6 +126,12 @@ class _RecipeBookAppState extends State<RecipeBookApp> {
           ? _StartupErrorPage(error: _startupError!, onRetry: _openLogin)
           : _user == null
           ? _LoginPage(database: _database, onAuthenticated: _onAuthenticated)
+          : _user!.isAdmin
+          ? _AccessManagementPage(
+              database: _database,
+              admin: _user!,
+              onLogout: _logout,
+            )
           : _RecipeHomePage(
               database: _database,
               user: _user!,
@@ -209,7 +215,7 @@ class _LoginPageState extends State<_LoginPage> {
     setState(() {
       _busy = true;
       _message = null;
-    }); 
+    });
     try {
       final LocalUser user;
       if (_creatingAccount) {
@@ -224,7 +230,17 @@ class _LoginPageState extends State<_LoginPage> {
           password: _passwordController.text,
         );
         if (signedIn == null) {
-          setState(() => _message = 'E-mail ou senha incorretos.');
+          final exists = await widget.database.accountExists(
+            _emailController.text,
+          );
+          setState(
+            () => _message = exists
+                ? 'E-mail ou senha incorretos.'
+                : 'Esta conta não está cadastrada neste aparelho. Sem '
+                      'sincronização, contas e receitas de outro aparelho '
+                      'não podem ser acessadas aqui. Crie uma conta neste '
+                      'aparelho para começar.',
+          );
           return;
         }
         user = signedIn;
@@ -483,7 +499,7 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
               recipe: recipe,
               onFavoriteTap: (isFavorite) => _setFavorite(recipe, isFavorite),
               onEdit: (updatedRecipe) => _editRecipe(updatedRecipe),
-              onDelete: () => _deleteRecipe(recipe),
+              onDelete: () => _deleteRecipe(widget.user.id, recipe),
             ),
           ),
         )
@@ -493,8 +509,11 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
   Future<Recipe?> _editRecipe(Recipe recipe) {
     return Navigator.of(context).push<Recipe>(
       MaterialPageRoute<Recipe>(
-        builder: (_) =>
-            _RecipeFormPage(database: widget.database, recipe: recipe),
+        builder: (_) => _RecipeFormPage(
+          database: widget.database,
+          userId: widget.user.id,
+          recipe: recipe,
+        ),
       ),
     );
   }
@@ -502,15 +521,16 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
   Future<void> _addRecipe() async {
     final saved = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => _RecipeFormPage(database: widget.database),
+        builder: (_) =>
+            _RecipeFormPage(database: widget.database, userId: widget.user.id),
       ),
     );
     if (saved == true) await _loadRecipes();
   }
 
-  Future<bool> _deleteRecipe(Recipe recipe) async {
+  Future<bool> _deleteRecipe(int userId, Recipe recipe) async {
     try {
-      await widget.database.deleteRecipe(recipe.id);
+      await widget.database.deleteRecipe(userId: userId, id: recipe.id);
       return true;
     } on Exception catch (error) {
       if (!mounted) return false;
@@ -519,17 +539,6 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
       );
       return false;
     }
-  }
-
-  Future<void> _openAccessManagement() async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => _AccessManagementPage(
-          database: widget.database,
-          admin: widget.user,
-        ),
-      ),
-    );
   }
 
   @override
@@ -542,12 +551,6 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
           style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
         ),
         actions: [
-          if (widget.user.isAdmin)
-            IconButton(
-              tooltip: 'Gerenciar acessos',
-              onPressed: _openAccessManagement,
-              icon: const Icon(Icons.manage_accounts_outlined),
-            ),
           IconButton(
             tooltip: 'Sair da conta',
             onPressed: widget.onLogout,
@@ -563,6 +566,28 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF0E6),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.phone_android, color: _brown, size: 20),
+                      SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          'Suas receitas ficam salvas neste aparelho e não '
+                          'são transferidas para outros celulares.',
+                          style: TextStyle(color: _text, fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
                 Text(
                   'Olá, ${widget.user.name}!',
                   style: const TextStyle(
@@ -630,7 +655,7 @@ class _RecipeHomePageState extends State<_RecipeHomePage> {
                     child: Padding(
                       padding: EdgeInsets.all(24),
                       child: Text(
-                        'Nenhuma receita por aqui.',
+                        'Nenhuma receita salva nesta conta neste aparelho.',
                         style: TextStyle(color: _subtle),
                       ),
                     ),
@@ -669,10 +694,12 @@ class _AccessManagementPage extends StatefulWidget {
   const _AccessManagementPage({
     required this.database,
     required this.admin,
+    required this.onLogout,
   });
 
   final RecipeDatabase database;
   final LocalUser admin;
+  final Future<void> Function() onLogout;
 
   @override
   State<_AccessManagementPage> createState() => _AccessManagementPageState();
@@ -730,48 +757,19 @@ class _AccessManagementPageState extends State<_AccessManagementPage> {
     }
   }
 
-  Future<void> _deleteAccount(LocalUser account) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Excluir conta?'),
-        content: Text(
-          'A conta de ${account.name} (${account.email}) será excluída.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    setState(() => _workingAccountId = account.id);
-    try {
-      await widget.database.deleteAccount(
-        adminUserId: widget.admin.id,
-        accountId: account.id,
-      );
-      await _loadAccounts();
-    } on Exception catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Não foi possível excluir a conta: $error')),
-      );
-    } finally {
-      if (mounted) setState(() => _workingAccountId = null);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Gerenciar acessos')),
+      appBar: AppBar(
+        title: const Text('Gerenciar acessos'),
+        actions: [
+          IconButton(
+            tooltip: 'Sair da conta',
+            onPressed: widget.onLogout,
+            icon: const Icon(Icons.logout_rounded),
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: _brown))
           : _error != null
@@ -793,7 +791,8 @@ class _AccessManagementPageState extends State<_AccessManagementPage> {
                   const SizedBox(height: 8),
                   const Text(
                     'Contas bloqueadas não conseguem entrar. A conta '
-                    'administradora não pode ser bloqueada ou excluída.',
+                    'administradora serve apenas para gerenciar acessos e '
+                    'não pode ser bloqueada.',
                     style: TextStyle(color: _subtle),
                   ),
                   const SizedBox(height: 12),
@@ -844,14 +843,6 @@ class _AccessManagementPageState extends State<_AccessManagementPage> {
                                           : Icons.block_outlined,
                                     ),
                                   ),
-                                  IconButton(
-                                    tooltip: 'Excluir conta',
-                                    onPressed: () => _deleteAccount(account),
-                                    icon: const Icon(
-                                      Icons.delete_outline,
-                                      color: Color(0xFF9A3829),
-                                    ),
-                                  ),
                                 ],
                               ),
                       ),
@@ -864,9 +855,14 @@ class _AccessManagementPageState extends State<_AccessManagementPage> {
 }
 
 class _RecipeFormPage extends StatefulWidget {
-  const _RecipeFormPage({required this.database, this.recipe});
+  const _RecipeFormPage({
+    required this.database,
+    required this.userId,
+    this.recipe,
+  });
 
   final RecipeDatabase database;
+  final int userId;
   final Recipe? recipe;
 
   @override
@@ -923,6 +919,7 @@ class _RecipeFormPageState extends State<_RecipeFormPage> {
       if (_isEditing) {
         final recipe = widget.recipe!;
         await widget.database.updateRecipe(
+          userId: widget.userId,
           id: recipe.id,
           name: name,
           category: _category,
@@ -942,6 +939,7 @@ class _RecipeFormPageState extends State<_RecipeFormPage> {
         );
       } else {
         await widget.database.addRecipe(
+          userId: widget.userId,
           name: name,
           category: _category,
           ingredients: ingredients,

@@ -93,7 +93,7 @@ class RecipeDatabase {
   RecipeDatabase({Database? database}) : _providedDatabase = database;
 
   static const _databaseName = 'meu_livro_de_receitas.db';
-  static const _adminEmail = 'raulferreira081@gmail.com.br';
+  static const _adminEmail = 'raulferreira091@gmail.com.br';
   static const _adminPassword = 'adimin_raul_2006';
   static const _passwordIterations = 120000;
   static final _passwordAlgorithm = Pbkdf2(
@@ -115,7 +115,7 @@ class RecipeDatabase {
       final path = p.join(await getDatabasesPath(), _databaseName);
       _database = await openDatabase(
         path,
-        version: 2,
+        version: 3,
         onCreate: (db, _) async {
           await _createTables(db);
         },
@@ -127,6 +127,7 @@ class RecipeDatabase {
 
     await _ensureAdminAccount(_database!);
     await _removeStarterRecipes(_database!);
+    await _assignLegacyRecipes(_database!);
   }
 
   Future<Database> get _db async {
@@ -161,6 +162,7 @@ class RecipeDatabase {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS recipes (
         id TEXT PRIMARY KEY,
+        owner_user_id INTEGER,
         name TEXT NOT NULL,
         category TEXT NOT NULL,
         minutes INTEGER NOT NULL,
@@ -170,6 +172,10 @@ class RecipeDatabase {
         steps TEXT NOT NULL
       )
     ''');
+    final recipeColumns = await db.rawQuery('PRAGMA table_info(recipes)');
+    if (!recipeColumns.any((column) => column['name'] == 'owner_user_id')) {
+      await db.execute('ALTER TABLE recipes ADD COLUMN owner_user_id INTEGER');
+    }
     await db.execute('''
       CREATE TABLE IF NOT EXISTS favorites (
         user_id INTEGER NOT NULL,
@@ -196,6 +202,12 @@ class RecipeDatabase {
       'role': 'admin',
       'is_blocked': 0,
     };
+    await db.update(
+      'users',
+      {'role': 'user'},
+      where: "role = 'admin' AND email != ?",
+      whereArgs: [_adminEmail],
+    );
     final updated = await db.update(
       'users',
       admin,
@@ -216,6 +228,32 @@ class RecipeDatabase {
         await transaction.delete('recipes', where: 'id = ?', whereArgs: [id]);
       }
     });
+  }
+
+  Future<void> _assignLegacyRecipes(Database db) async {
+    final activeUsers = await db.rawQuery(
+      '''
+      SELECT users.id
+      FROM settings
+      JOIN users ON users.id = CAST(settings.value AS INTEGER)
+      WHERE settings.key = ?
+      LIMIT 1
+      ''',
+      ['active_user_id'],
+    );
+    final legacyOwners = activeUsers.isNotEmpty
+        ? activeUsers
+        : await db.query(
+            'users',
+            columns: ['id'],
+            where: "role = 'user'",
+            orderBy: 'id',
+            limit: 1,
+          );
+    if (legacyOwners.isEmpty) return;
+    await db.update('recipes', {
+      'owner_user_id': legacyOwners.first['id']! as int,
+    }, where: 'owner_user_id IS NULL');
   }
 
   Future<LocalUser> register({
@@ -287,6 +325,18 @@ class RecipeDatabase {
     return user;
   }
 
+  Future<bool> accountExists(String email) async {
+    final db = await _db;
+    final rows = await db.query(
+      'users',
+      columns: ['id'],
+      where: 'email = ?',
+      whereArgs: [email.trim().toLowerCase()],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
   Future<LocalUser?> savedSession() async {
     final db = await _db;
     final rows = await db.query(
@@ -347,37 +397,6 @@ class RecipeDatabase {
     );
   }
 
-  Future<void> deleteAccount({
-    required int adminUserId,
-    required int accountId,
-  }) async {
-    final db = await _db;
-    await _requireAdmin(db, adminUserId);
-    final accounts = await db.query(
-      'users',
-      columns: ['role'],
-      where: 'id = ?',
-      whereArgs: [accountId],
-      limit: 1,
-    );
-    if (accounts.isEmpty) throw const AccountNotFoundException();
-    if (accounts.first['role'] == 'admin') {
-      throw const CannotManageAdministratorException();
-    }
-    await db.transaction((transaction) async {
-      await transaction.delete(
-        'favorites',
-        where: 'user_id = ?',
-        whereArgs: [accountId],
-      );
-      await transaction.delete(
-        'users',
-        where: 'id = ?',
-        whereArgs: [accountId],
-      );
-    });
-  }
-
   Future<void> _requireAdmin(Database db, int userId) async {
     final rows = await db.query(
       'users',
@@ -419,29 +438,34 @@ class RecipeDatabase {
 
   Future<List<Recipe>> recipesFor(int userId) async {
     final db = await _db;
+    await _requireRecipeAccount(db, userId);
     final rows = await db.rawQuery(
       '''
       SELECT recipes.*, favorites.user_id AS is_favorite
       FROM recipes
       LEFT JOIN favorites
         ON favorites.recipe_id = recipes.id AND favorites.user_id = ?
+      WHERE recipes.owner_user_id = ?
       ORDER BY recipes.name COLLATE NOCASE
       ''',
-      [userId],
+      [userId, userId],
     );
     return rows.map(Recipe.fromMap).toList();
   }
 
   Future<String> addRecipe({
+    required int userId,
     required String name,
     required String category,
     required String ingredients,
     required String preparation,
   }) async {
     final db = await _db;
+    await _requireRecipeAccount(db, userId);
     final id = 'recipe-${DateTime.now().microsecondsSinceEpoch}';
     await db.insert('recipes', {
       'id': id,
+      'owner_user_id': userId,
       'name': name.trim(),
       'category': _normalizeCategory(category),
       'minutes': 0,
@@ -454,6 +478,7 @@ class RecipeDatabase {
   }
 
   Future<void> updateRecipe({
+    required int userId,
     required String id,
     required String name,
     required String category,
@@ -461,6 +486,7 @@ class RecipeDatabase {
     required String preparation,
   }) async {
     final db = await _db;
+    await _requireRecipeAccount(db, userId);
     final updated = await db.update(
       'recipes',
       {
@@ -472,8 +498,8 @@ class RecipeDatabase {
         'ingredients': ingredients.trim(),
         'steps': preparation.trim(),
       },
-      where: 'id = ?',
-      whereArgs: [id],
+      where: 'id = ? AND owner_user_id = ?',
+      whereArgs: [id, userId],
     );
     if (updated == 0) {
       throw const RecipeNotFoundException();
@@ -488,22 +514,21 @@ class RecipeDatabase {
     };
   }
 
-  Future<void> deleteRecipe(String id) async {
+  Future<void> deleteRecipe({required int userId, required String id}) async {
     final db = await _db;
+    await _requireRecipeAccount(db, userId);
     await db.transaction((transaction) async {
+      final deleted = await transaction.delete(
+        'recipes',
+        where: 'id = ? AND owner_user_id = ?',
+        whereArgs: [id, userId],
+      );
+      if (deleted == 0) throw const RecipeNotFoundException();
       await transaction.delete(
         'favorites',
         where: 'recipe_id = ?',
         whereArgs: [id],
       );
-      final deleted = await transaction.delete(
-        'recipes',
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-      if (deleted == 0) {
-        throw const RecipeNotFoundException();
-      }
     });
   }
 
@@ -513,6 +538,15 @@ class RecipeDatabase {
     required bool isFavorite,
   }) async {
     final db = await _db;
+    await _requireRecipeAccount(db, userId);
+    final ownedRecipes = await db.query(
+      'recipes',
+      columns: ['id'],
+      where: 'id = ? AND owner_user_id = ?',
+      whereArgs: [recipeId, userId],
+      limit: 1,
+    );
+    if (ownedRecipes.isEmpty) throw const RecipeNotFoundException();
     if (isFavorite) {
       await db.insert('favorites', {
         'user_id': userId,
@@ -524,6 +558,20 @@ class RecipeDatabase {
         where: 'user_id = ? AND recipe_id = ?',
         whereArgs: [userId, recipeId],
       );
+    }
+  }
+
+  Future<void> _requireRecipeAccount(Database db, int userId) async {
+    final users = await db.query(
+      'users',
+      columns: ['role', 'is_blocked'],
+      where: 'id = ?',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (users.isEmpty) throw const AccountNotFoundException();
+    if (users.first['role'] == 'admin' || users.first['is_blocked'] == 1) {
+      throw const AdminAuthorizationException();
     }
   }
 
